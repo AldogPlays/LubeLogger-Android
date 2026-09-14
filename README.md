@@ -1,6 +1,19 @@
 # LubeLogger Android wrapper
 
-A minimal native Kotlin WebView wrapper for a self-hosted LubeLogger instance. It tries the configured LAN server first, validates that the response is successful LubeLogger HTML, and then falls back to the configured Tailscale HTTPS server.
+A minimal native Kotlin WebView wrapper for any self-hosted LubeLogger instance. On first launch, enter a preferred server URL and an optional fallback URL. The settings are saved privately on the device.
+
+Before loading either address, the app performs a short HTTP GET and verifies that the response is successful HTML identifying itself as LubeLogger. It tries the preferred address first, followed by the optional fallback. If neither passes validation, it displays Retry and Configure Servers buttons.
+
+## Features
+
+- Works with arbitrary HTTP or HTTPS LubeLogger installations, including LAN addresses, reverse proxies, and private overlay networks such as Tailscale.
+- Restricts main-frame WebView navigation to the configured server origins.
+- Does not bypass TLS certificate validation.
+- Supports JavaScript, DOM storage, persistent cookies, file/photo uploads, Android back navigation, and system-bar insets.
+- Uses only the Android `INTERNET` permission, with no analytics, ads, accounts, API keys, Google Play Services, or third-party libraries.
+- Compatible with GrapheneOS and the installed system WebView.
+
+Because Android's network security configuration cannot dynamically allow cleartext traffic for user-entered hosts, HTTP support is enabled at the application level. Navigation remains limited in code to the origins entered by the user. HTTPS is strongly recommended whenever available.
 
 ## Debug build
 

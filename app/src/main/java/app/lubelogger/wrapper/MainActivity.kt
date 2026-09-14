@@ -17,10 +17,12 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
@@ -30,8 +32,9 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : Activity() {
     private companion object {
-        const val LAN_URL = "http://192.168.4.124:30035"
-        const val TAILSCALE_URL = "https://truenas-scale.dwelf-degree.ts.net:30335"
+        const val PREFS_NAME = "server_configuration"
+        const val PREF_PRIMARY_URL = "primary_url"
+        const val PREF_FALLBACK_URL = "fallback_url"
         const val FILE_CHOOSER_REQUEST = 42
         const val TIMEOUT_MS = 2500
         const val MAX_HTML_BYTES = 512 * 1024
@@ -44,7 +47,9 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) {
+        if (!hasConfiguration()) {
+            showConfiguration()
+        } else if (savedInstanceState == null) {
             findServer()
         } else {
             showWebView(null)
@@ -60,17 +65,96 @@ class MainActivity : Activity() {
     private fun findServer() {
         val generation = checkGeneration.incrementAndGet()
         showChecking()
+        val addresses = configuredUrls()
         worker.execute {
-            val selected = when {
-                validatesAsLubeLogger(LAN_URL) -> LAN_URL
-                validatesAsLubeLogger(TAILSCALE_URL) -> TAILSCALE_URL
-                else -> null
-            }
+            val selected = addresses.firstOrNull(::validatesAsLubeLogger)
             runOnUiThread {
                 if (generation != checkGeneration.get() || isFinishing || isDestroyed) return@runOnUiThread
                 if (selected == null) showUnavailable() else showWebView(selected)
             }
         }
+    }
+
+    private fun hasConfiguration(): Boolean =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_PRIMARY_URL, null) != null
+
+    private fun configuredUrls(): List<String> {
+        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        return listOfNotNull(
+            preferences.getString(PREF_PRIMARY_URL, null),
+            preferences.getString(PREF_FALLBACK_URL, null)?.takeIf(String::isNotBlank)
+        )
+    }
+
+    private fun normalizeServerUrl(value: String): String? {
+        return try {
+            val uri = URI(value.trim())
+            if ((uri.scheme != "http" && uri.scheme != "https") || uri.host.isNullOrBlank() || uri.userInfo != null) {
+                null
+            } else {
+                uri.toString().trimEnd('/')
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun showConfiguration() {
+        checkGeneration.incrementAndGet()
+        webView?.destroy()
+        webView = null
+        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val primaryInput = EditText(this).apply {
+            hint = "https://lubelogger.example.com"
+            setText(preferences.getString(PREF_PRIMARY_URL, ""))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setSingleLine(true)
+        }
+        val fallbackInput = EditText(this).apply {
+            hint = "Optional second URL"
+            setText(preferences.getString(PREF_FALLBACK_URL, ""))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setSingleLine(true)
+        }
+        setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.WHITE)
+            applySystemBarInsets(this, 48, 48, 48, 48)
+            addView(TextView(this@MainActivity).apply {
+                text = "Connect to LubeLogger"
+                textSize = 24f
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Enter your preferred server URL and, optionally, a fallback. HTTPS is recommended."
+                textSize = 16f
+                setPadding(0, 16, 0, 20)
+            })
+            addView(TextView(this@MainActivity).apply { text = "Preferred URL" })
+            addView(primaryInput, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(TextView(this@MainActivity).apply {
+                text = "Fallback URL (optional)"
+                setPadding(0, 20, 0, 0)
+            })
+            addView(fallbackInput, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(Button(this@MainActivity).apply {
+                text = "Save and connect"
+                setOnClickListener {
+                    val primary = normalizeServerUrl(primaryInput.text.toString())
+                    val fallbackText = fallbackInput.text.toString().trim()
+                    val fallback = fallbackText.takeIf(String::isNotBlank)?.let(::normalizeServerUrl)
+                    if (primary == null || (fallbackText.isNotBlank() && fallback == null)) {
+                        Toast.makeText(this@MainActivity, "Enter valid HTTP or HTTPS URLs", Toast.LENGTH_LONG).show()
+                    } else {
+                        preferences.edit()
+                            .putString(PREF_PRIMARY_URL, primary)
+                            .putString(PREF_FALLBACK_URL, fallback.orEmpty())
+                            .apply()
+                        findServer()
+                    }
+                }
+            })
+        })
     }
 
     private fun validatesAsLubeLogger(address: String): Boolean {
@@ -153,6 +237,10 @@ class MainActivity : Activity() {
             addView(Button(this@MainActivity).apply {
                 text = "Retry"
                 setOnClickListener { findServer() }
+            })
+            addView(Button(this@MainActivity).apply {
+                text = "Configure servers"
+                setOnClickListener { showConfiguration() }
             })
         })
     }
@@ -252,9 +340,19 @@ class MainActivity : Activity() {
     }
 
     private fun isAllowedOrigin(uri: Uri): Boolean {
-        val port = if (uri.port >= 0) uri.port else if (uri.scheme == "https") 443 else 80
-        return (uri.scheme == "http" && uri.host == "192.168.4.124" && port == 30035) ||
-            (uri.scheme == "https" && uri.host == "truenas-scale.dwelf-degree.ts.net" && port == 30335)
+        val candidate = try {
+            URI(uri.toString()).let { Triple(it.scheme?.lowercase(), it.host?.lowercase(), effectivePort(it)) }
+        } catch (_: Exception) {
+            return false
+        }
+        return configuredUrls().any { address ->
+            try {
+                val configured = URI(address)
+                candidate == Triple(configured.scheme.lowercase(), configured.host.lowercase(), effectivePort(configured))
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     @Deprecated("Deprecated by Android")
