@@ -4,8 +4,13 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -13,7 +18,9 @@ import android.webkit.CookieManager
 import android.webkit.SafeBrowsingResponse
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -28,6 +35,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : Activity() {
@@ -37,13 +45,30 @@ class MainActivity : Activity() {
         const val PREF_FALLBACK_URL = "fallback_url"
         const val FILE_CHOOSER_REQUEST = 42
         const val TIMEOUT_MS = 2500
+        const val FAILOVER_TIMEOUT_MS = 1500
+        const val NETWORK_SETTLE_MS = 1200L
+        const val FAILOVER_RETRY_MS = 4000L
         const val MAX_HTML_BYTES = 512 * 1024
+        const val STATE_ACTIVE_BASE_URL = "active_base_url"
     }
 
     private val worker = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val checkGeneration = AtomicInteger()
+    private val silentCheckRunning = AtomicBoolean()
     private var webView: WebView? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var activeBaseUrl: String? = null
+    private var networkCallbackRegistered = false
+    private val silentCheckRunnable = Runnable { checkForSilentFailover() }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = scheduleSilentCheck(NETWORK_SETTLE_MS)
+
+        override fun onLost(network: Network) = scheduleSilentCheck(NETWORK_SETTLE_MS)
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) =
+            scheduleSilentCheck(NETWORK_SETTLE_MS)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +77,7 @@ class MainActivity : Activity() {
         } else if (savedInstanceState == null) {
             findServer()
         } else {
+            activeBaseUrl = savedInstanceState.getString(STATE_ACTIVE_BASE_URL)
             showWebView(null)
             webView?.restoreState(savedInstanceState)
         }
@@ -59,6 +85,7 @@ class MainActivity : Activity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         webView?.saveState(outState)
+        outState.putString(STATE_ACTIVE_BASE_URL, activeBaseUrl)
         super.onSaveInstanceState(outState)
     }
 
@@ -70,8 +97,60 @@ class MainActivity : Activity() {
             val selected = addresses.firstOrNull(::validatesAsLubeLogger)
             runOnUiThread {
                 if (generation != checkGeneration.get() || isFinishing || isDestroyed) return@runOnUiThread
-                if (selected == null) showUnavailable() else showWebView(selected)
+                if (selected == null) {
+                    showUnavailable()
+                } else {
+                    activeBaseUrl = selected
+                    showWebView(selected)
+                }
             }
+        }
+    }
+
+    private fun scheduleSilentCheck(delayMs: Long) {
+        mainHandler.post {
+            if (webView == null || activeBaseUrl == null || isFinishing || isDestroyed) return@post
+            mainHandler.removeCallbacks(silentCheckRunnable)
+            mainHandler.postDelayed(silentCheckRunnable, delayMs)
+        }
+    }
+
+    private fun checkForSilentFailover() {
+        val current = activeBaseUrl ?: return
+        val view = webView ?: return
+        if (!silentCheckRunning.compareAndSet(false, true)) return
+        val generation = checkGeneration.get()
+        val alternatives = configuredUrls().filterNot { sameAddress(it, current) }
+        worker.execute {
+            val currentWorks = validatesAsLubeLogger(current, FAILOVER_TIMEOUT_MS)
+            val replacement = if (currentWorks) null else
+                alternatives.firstOrNull { validatesAsLubeLogger(it, FAILOVER_TIMEOUT_MS) }
+            runOnUiThread {
+                silentCheckRunning.set(false)
+                if (generation != checkGeneration.get() || webView !== view || isFinishing || isDestroyed) {
+                    return@runOnUiThread
+                }
+                if (replacement != null) {
+                    val targetUrl = equivalentPageOn(replacement)
+                    activeBaseUrl = replacement
+                    view.loadUrl(targetUrl)
+                } else if (!currentWorks) {
+                    scheduleSilentCheck(FAILOVER_RETRY_MS)
+                }
+            }
+        }
+    }
+
+    private fun sameAddress(first: String, second: String): Boolean =
+        first.trimEnd('/').equals(second.trimEnd('/'), ignoreCase = true)
+
+    private fun equivalentPageOn(replacement: String): String {
+        val currentBase = activeBaseUrl ?: return replacement
+        val currentPage = webView?.url ?: return replacement
+        return if (currentPage.startsWith(currentBase, ignoreCase = true)) {
+            replacement + currentPage.substring(currentBase.length)
+        } else {
+            replacement
         }
     }
 
@@ -101,6 +180,7 @@ class MainActivity : Activity() {
 
     private fun showConfiguration() {
         checkGeneration.incrementAndGet()
+        activeBaseUrl = null
         webView?.destroy()
         webView = null
         val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -157,7 +237,7 @@ class MainActivity : Activity() {
         })
     }
 
-    private fun validatesAsLubeLogger(address: String): Boolean {
+    private fun validatesAsLubeLogger(address: String, timeoutMs: Int = TIMEOUT_MS): Boolean {
         var current = URL(address)
         val requiredOrigin = URI(address).let { Triple(it.scheme, it.host, effectivePort(it)) }
 
@@ -166,8 +246,8 @@ class MainActivity : Activity() {
             try {
                 connection = current.openConnection() as HttpURLConnection
                 connection.instanceFollowRedirects = false
-                connection.connectTimeout = TIMEOUT_MS
-                connection.readTimeout = TIMEOUT_MS
+                connection.connectTimeout = timeoutMs
+                connection.readTimeout = timeoutMs
                 connection.requestMethod = "GET"
                 connection.setRequestProperty("Accept", "text/html,application/xhtml+xml")
                 connection.setRequestProperty("User-Agent", "LubeLogger Android")
@@ -216,6 +296,7 @@ class MainActivity : Activity() {
     }
 
     private fun showChecking() {
+        activeBaseUrl = null
         webView?.destroy()
         webView = null
         setContentView(centeredLayout().apply {
@@ -274,6 +355,20 @@ class MainActivity : Activity() {
                 if (!request.isForMainFrame) return false
                 val url = request.url
                 return if (isAllowedOrigin(url)) false else true
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) scheduleSilentCheck(NETWORK_SETTLE_MS)
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: WebResourceResponse
+            ) {
+                if (request.isForMainFrame && errorResponse.statusCode >= 500) {
+                    scheduleSilentCheck(NETWORK_SETTLE_MS)
+                }
             }
 
             override fun onSafeBrowsingHit(
@@ -379,10 +474,38 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         webView?.onResume()
+        scheduleSilentCheck(NETWORK_SETTLE_MS)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!networkCallbackRegistered) {
+            val connectivity = getSystemService(ConnectivityManager::class.java)
+            try {
+                connectivity.registerDefaultNetworkCallback(networkCallback)
+                networkCallbackRegistered = true
+            } catch (_: RuntimeException) {
+                // WebView failures and onResume checks still provide failover.
+            }
+        }
+    }
+
+    override fun onStop() {
+        mainHandler.removeCallbacks(silentCheckRunnable)
+        if (networkCallbackRegistered) {
+            try {
+                getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
+            } catch (_: RuntimeException) {
+                // Already unregistered by the system.
+            }
+            networkCallbackRegistered = false
+        }
+        super.onStop()
     }
 
     override fun onDestroy() {
         checkGeneration.incrementAndGet()
+        mainHandler.removeCallbacksAndMessages(null)
         worker.shutdownNow()
         webView?.apply {
             stopLoading()

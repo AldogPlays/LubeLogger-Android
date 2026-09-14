@@ -10,6 +10,7 @@ Before loading either address, the app performs a short HTTP GET and verifies th
 - Restricts main-frame WebView navigation to the configured server origins.
 - Does not bypass TLS certificate validation.
 - Supports JavaScript, DOM storage, persistent cookies, file/photo uploads, Android back navigation, and system-bar insets.
+- Silently detects network transitions and main-page connection failures, validates the active server in the background, and switches to the configured fallback when needed.
 - Uses only the Android `INTERNET` permission, with no analytics, ads, accounts, API keys, Google Play Services, or third-party libraries.
 - Compatible with GrapheneOS and the installed system WebView.
 
