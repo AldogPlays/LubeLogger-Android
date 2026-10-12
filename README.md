@@ -1,47 +1,87 @@
-# LubeLogger Android wrapper
+# LubeLogger-Android
 
-A minimal native Kotlin WebView wrapper for any self-hosted LubeLogger instance. On first launch, enter a preferred server URL and an optional fallback URL. The settings are saved privately on the device.
+A lightweight Android client for self-hosted [LubeLogger](https://github.com/hargata/lubelog) instances, built with Kotlin and Android WebView.
 
-Before loading either address, the app performs a short HTTP GET and verifies that the response is successful HTML identifying itself as LubeLogger. It tries the preferred address first, followed by the optional fallback. If neither passes validation, it displays Retry and Configure Servers buttons.
+Originally created to make accessing my self-hosted vehicle maintenance records more convenient, this app provides a simple mobile experience with automatic server failover. It supports configurable primary and fallback URLs, allowing seamless access across local and remote networks.
+
+## Download
+
+The latest version is available through [GitHub Releases](https://github.com/AldogPlays/LubeLogger-Android/releases/latest).
 
 ## Features
 
-- Works with arbitrary HTTP or HTTPS LubeLogger installations, including LAN addresses, reverse proxies, and private overlay networks such as Tailscale.
-- Restricts main-frame WebView navigation to the configured server origins.
-- Does not bypass TLS certificate validation.
-- Supports JavaScript, DOM storage, persistent cookies, file/photo uploads, Android back navigation, and system-bar insets.
-- Silently detects network transitions and main-page connection failures, validates the active server in the background, and switches to the configured fallback when needed.
-- Uses only the Android `INTERNET` permission, with no analytics, ads, accounts, API keys, Google Play Services, or third-party libraries.
-- Compatible with GrapheneOS and the installed system WebView.
+- **Automatic server failover** — Detects network changes and connection failures, switching between configured server addresses when necessary.
+- **Flexible connectivity** — Supports LAN addresses, reverse proxies, and private overlay networks such as Tailscale.
+- **Persistent configuration** — Stores preferred and fallback server URLs locally on the device.
+- **Native Android integration** — Supports file and photo uploads, persistent cookies, Android back navigation, and system-bar insets.
+- **Minimal dependencies** — Uses only the Android `INTERNET` permission, with no analytics, ads, Google Play Services, or third-party libraries.
+- **GrapheneOS compatibility** — Works with GrapheneOS and the installed Android System WebView.
 
-Because Android's network security configuration cannot dynamically allow cleartext traffic for user-entered hosts, HTTP support is enabled at the application level. Navigation remains limited in code to the origins entered by the user. HTTPS is strongly recommended whenever available.
+## How It Works
 
-## Debug build
+On first launch, the app prompts for a preferred server URL and an optional fallback URL.
 
-With JDK 17 and Android SDK 35 installed:
+Before connecting, it performs a short HTTP GET request to verify that the server responds successfully with recognizable LubeLogger HTML content.
+
+The preferred server is checked first, followed by the fallback if necessary. If neither is available, the app presents options to retry the connection or reconfigure the server addresses.
+
+While running, the app monitors network transitions and main-page connection failures. When connectivity changes, it validates the active server in the background and automatically switches to the configured fallback when needed.
+
+## Security Considerations
+
+- WebView navigation is restricted to the configured server origins.
+- TLS certificate validation is enforced and never bypassed.
+- Server configuration is stored locally on the device.
+- No additional app-specific accounts, API keys, or external services are required.
+
+**HTTP support:** Android's network security configuration cannot dynamically permit cleartext traffic for arbitrary user-provided hosts, so HTTP is enabled at the application level. Navigation remains restricted to user-configured origins.
+
+HTTPS is strongly recommended whenever available, particularly when accessing an instance outside a trusted local network.
+
+## Building
+
+### Requirements
+
+- JDK 17
+- Android SDK 35
+
+### Debug Build
+
+Build the debug APK using Gradle:
 
 ```sh
 ./gradlew assembleDebug
 ```
 
-The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+The resulting APK will be located at:
 
-## Signed release build
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
 
-Create a private keystore once (keep it outside this repository and back it up):
+### Signed Release Build
+
+Generate a private signing keystore (only required once):
 
 ```sh
 keytool -genkeypair -v -keystore lubelogger-release.jks -alias lubelogger \
   -keyalg RSA -keysize 4096 -validity 10000
 ```
 
-Build the release APK, then sign and verify it with Android build-tools:
+Build the release APK:
 
 ```sh
 ./gradlew assembleRelease
+```
+
+Align, sign, and verify the APK using Android build-tools:
+
+```sh
 zipalign -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
+
 apksigner sign --ks lubelogger-release.jks --out LubeLogger-release.apk app-release-aligned.apk
+
 apksigner verify --verbose LubeLogger-release.apk
 ```
 
-Never commit the keystore or its passwords. Updates must always be signed with the same key.
+**Important:** Keep your signing keystore and credentials private. Never commit them to the repository, and maintain a secure backup. Future updates must be signed using the same signing key.
