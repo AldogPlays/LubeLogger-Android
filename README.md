@@ -1,3 +1,4 @@
+
 # LubeLogger-Android
 
 A lightweight Android client for self-hosted [LubeLogger](https://github.com/hargata/lubelog) instances, built with Kotlin and Android WebView.
@@ -7,6 +8,27 @@ Originally created to make accessing my self-hosted vehicle maintenance records 
 ## Download
 
 The latest version is available through [GitHub Releases](https://github.com/AldogPlays/LubeLogger-Android/releases/latest).
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="home.png">
+        <img src="home.png" alt="LubeLogger home screen displaying vehicles" width="260">
+      </a>
+      <br>
+      <sub>Vehicle overview</sub>
+    </td>
+    <td align="center">
+      <a href="vehicle-details.png">
+        <img src="vehicle-details.png" alt="LubeLogger vehicle details and statistics" width="260">
+      </a>
+      <br>
+      <sub>Vehicle statistics and maintenance records</sub>
+    </td>
+  </tr>
+</table>
 
 ## Features
 
