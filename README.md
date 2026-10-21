@@ -3,13 +3,17 @@
 
 A lightweight Android client for self-hosted [LubeLogger](https://github.com/hargata/lubelog) instances, built with Kotlin and Android WebView.
 
-Originally created to make accessing my self-hosted vehicle maintenance records more convenient, this app provides a simple mobile experience with automatic server failover. It supports configurable primary and fallback URLs, allowing seamless access across local and remote networks.
+I built this to keep my vehicle maintenance records close at hand. It opens your own LubeLogger server in a dedicated app, with preferred and fallback addresses for use at home or away.
+
+Requires Android 8.0 (API 26) or newer, Android System WebView, and your own LubeLogger server. No Google Play Services required.
 
 ## Download
 
 The latest version is available through [GitHub Releases](https://github.com/AldogPlays/LubeLogger-Android/releases/latest).
 
 ## Screenshots
+
+Click a screenshot to view it larger.
 
 <table>
   <tr>
@@ -36,10 +40,16 @@ The latest version is available through [GitHub Releases](https://github.com/Ald
 - **Flexible connectivity** — Supports LAN addresses, reverse proxies, and private overlay networks such as Tailscale.
 - **Persistent configuration** — Stores preferred and fallback server URLs locally on the device.
 - **Native Android integration** — Supports file and photo uploads, persistent cookies, Android back navigation, and system-bar insets.
-- **Minimal dependencies** — Uses only the Android `INTERNET` permission, with no analytics, ads, Google Play Services, or third-party libraries.
+- **Minimal dependencies** — Requests Internet and network-state permissions, with no analytics, ads, Google Play Services, or third-party libraries.
 - **GrapheneOS compatibility** — Works with GrapheneOS and the installed Android System WebView.
 
-## How It Works
+## Getting started
+
+1. Install the APK from GitHub Releases and open **LubeLogger**.
+2. Enter your preferred server URL and, optionally, a fallback address.
+3. Connect and sign in to your LubeLogger server as usual.
+
+## Connection behavior
 
 On first launch, the app prompts for a preferred server URL and an optional fallback URL.
 
@@ -49,7 +59,7 @@ The preferred server is checked first, followed by the fallback if necessary. If
 
 While running, the app monitors network transitions and main-page connection failures. When connectivity changes, it validates the active server in the background and automatically switches to the configured fallback when needed.
 
-## Security Considerations
+## Privacy and security
 
 - WebView navigation is restricted to the configured server origins.
 - TLS certificate validation is enforced and never bypassed.
@@ -67,7 +77,7 @@ HTTPS is strongly recommended whenever available, particularly when accessing an
 - JDK 17
 - Android SDK 35
 
-### Debug Build
+### Debug build
 
 Build the debug APK using Gradle:
 
@@ -81,7 +91,7 @@ The resulting APK will be located at:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### Signed Release Build
+### Signed release build
 
 Generate a private signing keystore (only required once):
 
@@ -107,3 +117,7 @@ apksigner verify --verbose LubeLogger-release.apk
 ```
 
 **Important:** Keep your signing keystore and credentials private. Never commit them to the repository, and maintain a secure backup. Future updates must be signed using the same signing key.
+
+## Project
+
+LubeLogger-Android is an independent wrapper, not an official LubeLogger application. Vehicle records and server authentication are handled by your LubeLogger instance.
