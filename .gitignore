@@ -6,3 +6,9 @@ local.properties
 *.keystore
 *.apk
 *.aab
+*.p12
+*.pfx
+*.pem
+.env
+.env.*
+release-artifacts/

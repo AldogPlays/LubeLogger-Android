@@ -206,7 +206,7 @@ class MainActivity : Activity() {
                 textSize = 24f
             })
             addView(TextView(this@MainActivity).apply {
-                text = "Enter your preferred server URL and, optionally, a fallback. HTTPS is recommended."
+                text = "Enter your preferred server URL and, optionally, a fallback. HTTPS is recommended. Private CAs installed in Android settings are supported; the certificate must match your server hostname."
                 textSize = 16f
                 setPadding(0, 16, 0, 20)
             })
@@ -351,6 +351,7 @@ class MainActivity : Activity() {
             setAcceptThirdPartyCookies(view, false)
         }
         view.webViewClient = object : WebViewClient() {
+            // Keep WebView's default TLS-error cancellation. Never add certificate exceptions.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame) return false
                 val url = request.url
@@ -371,6 +372,8 @@ class MainActivity : Activity() {
                 }
             }
 
+            // Android only invokes this callback on API 27 and newer.
+            @android.annotation.TargetApi(27)
             override fun onSafeBrowsingHit(
                 view: WebView,
                 request: WebResourceRequest,

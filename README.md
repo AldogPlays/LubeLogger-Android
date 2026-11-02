@@ -7,6 +7,8 @@ I built this to keep my vehicle maintenance records close at hand. It opens your
 
 Requires Android 8.0 (API 26) or newer, Android System WebView, and your own LubeLogger server. No Google Play Services required.
 
+Version 1.2.1 adds support for private CAs installed in Android settings, while preserving HTTPS certificate and hostname verification. It installs as **LubeLogger Client**, alongside the legacy LubeLogger app, because the legacy signing key is unavailable. Keep the old app installed to retain its settings and local data; configure the new app separately. See the [release notes](docs/release-notes-1.2.1.md) and [HTTPS and private CA guide](docs/HTTPS.md).
+
 ## Download
 
 The latest version is available through [GitHub Releases](https://github.com/AldogPlays/LubeLogger-Android/releases/latest).
@@ -45,7 +47,7 @@ Click a screenshot to view it larger.
 
 ## Getting started
 
-1. Install the APK from GitHub Releases and open **LubeLogger**.
+1. Install the APK from GitHub Releases and open **LubeLogger Client**.
 2. Enter your preferred server URL and, optionally, a fallback address.
 3. Connect and sign in to your LubeLogger server as usual.
 
@@ -63,6 +65,7 @@ While running, the app monitors network transitions and main-page connection fai
 
 - WebView navigation is restricted to the configured server origins.
 - TLS certificate validation is enforced and never bypassed.
+- Native HTTPS checks and System WebView trust Android's system and user CA stores through Network Security Configuration. No private CA is bundled and no server address is hardcoded.
 - Server configuration is stored locally on the device.
 - No additional app-specific accounts, API keys, or external services are required.
 
@@ -93,30 +96,7 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ### Signed release build
 
-Generate a private signing keystore (only required once):
-
-```sh
-keytool -genkeypair -v -keystore lubelogger-release.jks -alias lubelogger \
-  -keyalg RSA -keysize 4096 -validity 10000
-```
-
-Build the release APK:
-
-```sh
-./gradlew assembleRelease
-```
-
-Align, sign, and verify the APK using Android build-tools:
-
-```sh
-zipalign -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
-
-apksigner sign --ks lubelogger-release.jks --out LubeLogger-release.apk app-release-aligned.apk
-
-apksigner verify --verbose LubeLogger-release.apk
-```
-
-**Important:** Keep your signing keystore and credentials private. Never commit them to the repository, and maintain a secure backup. Future updates must be signed using the same signing key.
+Use the retained LubeLogger Client release keystore for future updates. The [build and signing guide](docs/BUILDING.md) covers local checks, certificate continuity, signing, and backups. The new package preserves the legacy installation instead of attempting an incompatible update. Keep keystores and credentials outside the repository.
 
 ## Project
 
