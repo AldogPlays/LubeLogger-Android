@@ -1,5 +1,11 @@
 # Validation record
 
+## Final architecture shipping review — November 21, 2026
+
+- Reviewed GitHub PR #2 from `f9063c1` through `2614fcb` against the server-address design, and PR #3 from `bff3540` through `95e9403` against the connection-lifecycle design. Independent standards and spec reviews found no confirmed correctness defects or spec violations in either PR. Naming the session's timing literals was suggested as optional readability polish.
+- The final `test lintDebug lintRelease assembleDebug assembleRelease` check succeeded, reusing up-to-date task results where applicable. All 13 JVM tests pass in each of the debug/release variants; both lint reports contain 0 errors / 17 warnings. Whitespace checks passed.
+- Device-dependent acceptance remains pending as recorded below. Shipping these source changes does not certify WebView restoration, picker delivery, network transitions, or private-CA trust on a device, and does not publish a signed APK release.
+
 ## Connection lifecycle — November 21, 2026
 
 - Seven deterministic connection-session tests pass: preferred/fallback selection, healthy fallback retention, debounce and retry timing, manual Retry, pause/close invalidation, stale-result isolation, replacement sessions, and restored-address handling. Three real loopback HTTP tests cover redirect origin restrictions, status/content recognition, redirect exhaustion, bounded reads, and timeouts. Together with address-policy tests, the debug suite contains 13 passing tests.

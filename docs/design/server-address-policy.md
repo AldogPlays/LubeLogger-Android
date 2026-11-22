@@ -1,6 +1,6 @@
 # Server-address policy — PR 1
 
-Status: approved for implementation; PR 1.
+Status: implemented and merged in GitHub PR #2; final standards/spec review completed without confirmed violations.
 
 ## Agreed scope
 

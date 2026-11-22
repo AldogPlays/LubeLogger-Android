@@ -1,6 +1,6 @@
 # Connection lifecycle — PR 2
 
-Status: approved for implementation; PR 2, based on merged server-address policy PR #2.
+Status: implemented in GitHub PR #3, based on merged server-address policy PR #2; final standards/spec review completed without confirmed violations.
 
 ## Agreed scope
 
