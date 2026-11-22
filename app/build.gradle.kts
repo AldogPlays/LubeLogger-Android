@@ -3,6 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}
+
 android {
     namespace = "app.lubelogger.wrapper"
     compileSdk = 35
