@@ -1,5 +1,12 @@
 # Validation record
 
+## Server-address policy — November 21, 2026
+
+- Three JVM regression tests pass, covering normalized identity, invalid configured addresses, origin-wide navigation decisions, and segment-aware page transfer with preserved encoded data/query/fragment. TDD runs first failed for each newly introduced behavior.
+- `testDebugUnitTest lintDebug lintRelease assembleDebug assembleRelease` passed using JDK 17, SDK 35, and the existing local NixOS tool overrides. Both lint reports contain 0 errors / 17 warnings. No tool overrides were added to the repository.
+- Standards and spec reviews found no confirmed production behavior violations. Source inspection confirms invalid saved settings reopen setup without writing preferences, and native redirects check every destination against the original probed origin.
+- Device setup recovery, actual WebView navigation, uploads, and the HTTPS/private-CA acceptance matrix were not executed. Passing JVM/build checks does not establish these runtime behaviors. No signed release was produced or distributed.
+
 ## LubeLogger Client 1.2.1 — November 2, 2026
 
 Version 1.2.1 / versionCode 4 is built and signed as the separate `app.lubelogger.client` package, with launcher name **LubeLogger Client**.

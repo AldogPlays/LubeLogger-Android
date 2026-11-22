@@ -7,7 +7,7 @@ Use JDK 17 and Android SDK platform 35. The pinned AGP 8.7.3 uses build-tools 34
 git diff --check
 ```
 
-There are currently no JVM unit tests; `testDebugUnitTest` reports `NO-SOURCE`. This is not a passing device TLS test. Debug and unsigned release APKs are under `app/build/outputs/apk/`.
+JVM regression tests exercise server-address policy. Passing these tests is not a passing device TLS test. Debug and unsigned release APKs are under `app/build/outputs/apk/`.
 
 ## Signing identity for LubeLogger Client
 

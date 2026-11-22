@@ -32,7 +32,6 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.InputStream
 import java.net.HttpURLConnection
-import java.net.URI
 import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -59,6 +58,7 @@ class MainActivity : Activity() {
     private var webView: WebView? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var activeBaseUrl: String? = null
+    private var serverAddresses: ServerAddresses? = null
     private var networkCallbackRegistered = false
     private val silentCheckRunnable = Runnable { checkForSilentFailover() }
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -72,8 +72,16 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!hasConfiguration()) {
-            showConfiguration()
+        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val configured = ServerAddresses.parse(
+            preferences.getString(PREF_PRIMARY_URL, "").orEmpty(),
+            preferences.getString(PREF_FALLBACK_URL, null)
+        )
+        serverAddresses = (configured as? AddressConfiguration.Valid)?.addresses
+        if (serverAddresses == null) {
+            showConfiguration((configured as? AddressConfiguration.Invalid)?.takeIf {
+                preferences.contains(PREF_PRIMARY_URL)
+            }?.errors)
         } else if (savedInstanceState == null) {
             findServer()
         } else {
@@ -142,43 +150,17 @@ class MainActivity : Activity() {
     }
 
     private fun sameAddress(first: String, second: String): Boolean =
-        first.trimEnd('/').equals(second.trimEnd('/'), ignoreCase = true)
+        ServerAddress.parse(first).getOrNull()?.let { it == ServerAddress.parse(second).getOrNull() } ?: false
 
     private fun equivalentPageOn(replacement: String): String {
-        val currentBase = activeBaseUrl ?: return replacement
-        val currentPage = webView?.url ?: return replacement
-        return if (currentPage.startsWith(currentBase, ignoreCase = true)) {
-            replacement + currentPage.substring(currentBase.length)
-        } else {
-            replacement
-        }
+        val currentBase = activeBaseUrl?.let { ServerAddress.parse(it).getOrNull() } ?: return replacement
+        val target = ServerAddress.parse(replacement).getOrNull() ?: return replacement
+        return currentBase.equivalentPage(webView?.url, target)
     }
 
-    private fun hasConfiguration(): Boolean =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_PRIMARY_URL, null) != null
+    private fun configuredUrls(): List<String> = serverAddresses?.ordered.orEmpty().map { it.url }
 
-    private fun configuredUrls(): List<String> {
-        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        return listOfNotNull(
-            preferences.getString(PREF_PRIMARY_URL, null),
-            preferences.getString(PREF_FALLBACK_URL, null)?.takeIf(String::isNotBlank)
-        )
-    }
-
-    private fun normalizeServerUrl(value: String): String? {
-        return try {
-            val uri = URI(value.trim())
-            if ((uri.scheme != "http" && uri.scheme != "https") || uri.host.isNullOrBlank() || uri.userInfo != null) {
-                null
-            } else {
-                uri.toString().trimEnd('/')
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun showConfiguration() {
+    private fun showConfiguration(errors: List<AddressError>? = null) {
         checkGeneration.incrementAndGet()
         activeBaseUrl = null
         webView?.destroy()
@@ -195,6 +177,9 @@ class MainActivity : Activity() {
             setText(preferences.getString(PREF_FALLBACK_URL, ""))
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine(true)
+        }
+        errors?.forEach { error ->
+            (if (error.field == AddressField.PREFERRED) primaryInput else fallbackInput).error = error.message
         }
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -220,17 +205,18 @@ class MainActivity : Activity() {
             addView(Button(this@MainActivity).apply {
                 text = "Save and connect"
                 setOnClickListener {
-                    val primary = normalizeServerUrl(primaryInput.text.toString())
-                    val fallbackText = fallbackInput.text.toString().trim()
-                    val fallback = fallbackText.takeIf(String::isNotBlank)?.let(::normalizeServerUrl)
-                    if (primary == null || (fallbackText.isNotBlank() && fallback == null)) {
-                        Toast.makeText(this@MainActivity, "Enter valid HTTP or HTTPS URLs", Toast.LENGTH_LONG).show()
-                    } else {
-                        preferences.edit()
-                            .putString(PREF_PRIMARY_URL, primary)
-                            .putString(PREF_FALLBACK_URL, fallback.orEmpty())
-                            .apply()
-                        findServer()
+                    when (val result = ServerAddresses.parse(primaryInput.text.toString(), fallbackInput.text.toString())) {
+                        is AddressConfiguration.Invalid -> result.errors.forEach { error ->
+                            (if (error.field == AddressField.PREFERRED) primaryInput else fallbackInput).error = error.message
+                        }
+                        is AddressConfiguration.Valid -> {
+                            serverAddresses = result.addresses
+                            preferences.edit()
+                                .putString(PREF_PRIMARY_URL, result.addresses.preferred.url)
+                                .putString(PREF_FALLBACK_URL, result.addresses.fallback?.url.orEmpty())
+                                .apply()
+                            findServer()
+                        }
                     }
                 }
             })
@@ -239,7 +225,7 @@ class MainActivity : Activity() {
 
     private fun validatesAsLubeLogger(address: String, timeoutMs: Int = TIMEOUT_MS): Boolean {
         var current = URL(address)
-        val requiredOrigin = URI(address).let { Triple(it.scheme, it.host, effectivePort(it)) }
+        val requiredOrigin = ServerAddress.parse(address).getOrNull() ?: return false
 
         repeat(4) {
             var connection: HttpURLConnection? = null
@@ -256,7 +242,7 @@ class MainActivity : Activity() {
                 if (status in 300..399) {
                     val location = connection.getHeaderField("Location") ?: return false
                     val next = current.toURI().resolve(location)
-                    if (Triple(next.scheme, next.host, effectivePort(next)) != requiredOrigin) return false
+                    if (!requiredOrigin.sameOrigin(next.toString())) return false
                     current = next.toURL()
                     return@repeat
                 }
@@ -287,12 +273,6 @@ class MainActivity : Activity() {
             total += count
         }
         return String(bytes, 0, total, Charsets.UTF_8)
-    }
-
-    private fun effectivePort(uri: URI): Int = when {
-        uri.port >= 0 -> uri.port
-        uri.scheme.equals("https", true) -> 443
-        else -> 80
     }
 
     private fun showChecking() {
@@ -438,19 +418,7 @@ class MainActivity : Activity() {
     }
 
     private fun isAllowedOrigin(uri: Uri): Boolean {
-        val candidate = try {
-            URI(uri.toString()).let { Triple(it.scheme?.lowercase(), it.host?.lowercase(), effectivePort(it)) }
-        } catch (_: Exception) {
-            return false
-        }
-        return configuredUrls().any { address ->
-            try {
-                val configured = URI(address)
-                candidate == Triple(configured.scheme.lowercase(), configured.host.lowercase(), effectivePort(configured))
-            } catch (_: Exception) {
-                false
-            }
-        }
+        return serverAddresses?.allowsNavigation(uri.toString()) == true
     }
 
     @Deprecated("Deprecated by Android")
