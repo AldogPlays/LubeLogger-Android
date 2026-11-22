@@ -29,13 +29,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import android.widget.Toast
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : Activity() {
     private companion object {
@@ -43,31 +36,21 @@ class MainActivity : Activity() {
         const val PREF_PRIMARY_URL = "primary_url"
         const val PREF_FALLBACK_URL = "fallback_url"
         const val FILE_CHOOSER_REQUEST = 42
-        const val TIMEOUT_MS = 2500
-        const val FAILOVER_TIMEOUT_MS = 1500
-        const val NETWORK_SETTLE_MS = 1200L
-        const val FAILOVER_RETRY_MS = 4000L
-        const val MAX_HTML_BYTES = 512 * 1024
         const val STATE_ACTIVE_BASE_URL = "active_base_url"
     }
 
-    private val worker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val checkGeneration = AtomicInteger()
-    private val silentCheckRunning = AtomicBoolean()
     private var webView: WebView? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var activeBaseUrl: String? = null
     private var serverAddresses: ServerAddresses? = null
+    private var connectionSession: ConnectionSession? = null
+    private var resumed = false
     private var networkCallbackRegistered = false
-    private val silentCheckRunnable = Runnable { checkForSilentFailover() }
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = scheduleSilentCheck(NETWORK_SETTLE_MS)
-
-        override fun onLost(network: Network) = scheduleSilentCheck(NETWORK_SETTLE_MS)
-
-        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) =
-            scheduleSilentCheck(NETWORK_SETTLE_MS)
+        override fun onAvailable(network: Network) = connectionHint()
+        override fun onLost(network: Network) = connectionHint()
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = connectionHint()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,18 +60,29 @@ class MainActivity : Activity() {
             preferences.getString(PREF_PRIMARY_URL, "").orEmpty(),
             preferences.getString(PREF_FALLBACK_URL, null)
         )
-        serverAddresses = (configured as? AddressConfiguration.Valid)?.addresses
-        if (serverAddresses == null) {
+        val addresses = (configured as? AddressConfiguration.Valid)?.addresses
+        serverAddresses = addresses
+        if (addresses == null) {
             showConfiguration((configured as? AddressConfiguration.Invalid)?.takeIf {
                 preferences.contains(PREF_PRIMARY_URL)
             }?.errors)
-        } else if (savedInstanceState == null) {
-            findServer()
-        } else {
-            activeBaseUrl = savedInstanceState.getString(STATE_ACTIVE_BASE_URL)
-            showWebView(null)
-            webView?.restoreState(savedInstanceState)
+            return
         }
+        var restored: ServerAddress? = null
+        val savedAddress = savedInstanceState?.getString(STATE_ACTIVE_BASE_URL)
+            ?.let { ServerAddress.parse(it).getOrNull() }?.takeIf { it in addresses.ordered }
+        if (savedInstanceState != null && savedAddress != null) {
+            showWebView(null)
+            val history = webView?.restoreState(savedInstanceState)
+            if (history != null && webView?.url?.let(addresses::allowsNavigation) == true) {
+                restored = savedAddress
+                activeBaseUrl = savedAddress.url
+            } else {
+                webView?.destroy()
+                webView = null
+            }
+        }
+        startSession(restored)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -97,71 +91,33 @@ class MainActivity : Activity() {
         super.onSaveInstanceState(outState)
     }
 
-    private fun findServer() {
-        val generation = checkGeneration.incrementAndGet()
-        showChecking()
-        val addresses = configuredUrls()
-        worker.execute {
-            val selected = addresses.firstOrNull(::validatesAsLubeLogger)
-            runOnUiThread {
-                if (generation != checkGeneration.get() || isFinishing || isDestroyed) return@runOnUiThread
-                if (selected == null) {
-                    showUnavailable()
-                } else {
-                    activeBaseUrl = selected
-                    showWebView(selected)
+    private fun startSession(restored: ServerAddress? = null) {
+        connectionSession?.close()
+        activeBaseUrl = restored?.url
+        val addresses = serverAddresses ?: return
+        connectionSession = ConnectionSession(
+            addresses, AndroidConnectionScheduler(mainHandler), ExecutorConnectionProbe(mainHandler), restored
+        ) { decision ->
+            when (decision) {
+                ConnectionDecision.Checking -> showChecking()
+                ConnectionDecision.Unavailable -> showUnavailable()
+                is ConnectionDecision.Selected -> {
+                    val target = decision.previous?.equivalentPage(webView?.url, decision.address) ?: decision.address.url
+                    activeBaseUrl = decision.address.url
+                    if (decision.previous == null) showWebView(target) else webView?.loadUrl(target)
                 }
             }
         }
+        if (resumed) connectionSession?.resume()
     }
 
-    private fun scheduleSilentCheck(delayMs: Long) {
-        mainHandler.post {
-            if (webView == null || activeBaseUrl == null || isFinishing || isDestroyed) return@post
-            mainHandler.removeCallbacks(silentCheckRunnable)
-            mainHandler.postDelayed(silentCheckRunnable, delayMs)
-        }
+    private fun connectionHint() {
+        mainHandler.post { connectionSession?.connectionChanged() }
     }
-
-    private fun checkForSilentFailover() {
-        val current = activeBaseUrl ?: return
-        val view = webView ?: return
-        if (!silentCheckRunning.compareAndSet(false, true)) return
-        val generation = checkGeneration.get()
-        val alternatives = configuredUrls().filterNot { sameAddress(it, current) }
-        worker.execute {
-            val currentWorks = validatesAsLubeLogger(current, FAILOVER_TIMEOUT_MS)
-            val replacement = if (currentWorks) null else
-                alternatives.firstOrNull { validatesAsLubeLogger(it, FAILOVER_TIMEOUT_MS) }
-            runOnUiThread {
-                silentCheckRunning.set(false)
-                if (generation != checkGeneration.get() || webView !== view || isFinishing || isDestroyed) {
-                    return@runOnUiThread
-                }
-                if (replacement != null) {
-                    val targetUrl = equivalentPageOn(replacement)
-                    activeBaseUrl = replacement
-                    view.loadUrl(targetUrl)
-                } else if (!currentWorks) {
-                    scheduleSilentCheck(FAILOVER_RETRY_MS)
-                }
-            }
-        }
-    }
-
-    private fun sameAddress(first: String, second: String): Boolean =
-        ServerAddress.parse(first).getOrNull()?.let { it == ServerAddress.parse(second).getOrNull() } ?: false
-
-    private fun equivalentPageOn(replacement: String): String {
-        val currentBase = activeBaseUrl?.let { ServerAddress.parse(it).getOrNull() } ?: return replacement
-        val target = ServerAddress.parse(replacement).getOrNull() ?: return replacement
-        return currentBase.equivalentPage(webView?.url, target)
-    }
-
-    private fun configuredUrls(): List<String> = serverAddresses?.ordered.orEmpty().map { it.url }
 
     private fun showConfiguration(errors: List<AddressError>? = null) {
-        checkGeneration.incrementAndGet()
+        connectionSession?.close()
+        connectionSession = null
         activeBaseUrl = null
         webView?.destroy()
         webView = null
@@ -215,64 +171,12 @@ class MainActivity : Activity() {
                                 .putString(PREF_PRIMARY_URL, result.addresses.preferred.url)
                                 .putString(PREF_FALLBACK_URL, result.addresses.fallback?.url.orEmpty())
                                 .apply()
-                            findServer()
+                            startSession()
                         }
                     }
                 }
             })
         })
-    }
-
-    private fun validatesAsLubeLogger(address: String, timeoutMs: Int = TIMEOUT_MS): Boolean {
-        var current = URL(address)
-        val requiredOrigin = ServerAddress.parse(address).getOrNull() ?: return false
-
-        repeat(4) {
-            var connection: HttpURLConnection? = null
-            try {
-                connection = current.openConnection() as HttpURLConnection
-                connection.instanceFollowRedirects = false
-                connection.connectTimeout = timeoutMs
-                connection.readTimeout = timeoutMs
-                connection.requestMethod = "GET"
-                connection.setRequestProperty("Accept", "text/html,application/xhtml+xml")
-                connection.setRequestProperty("User-Agent", "LubeLogger Android")
-
-                val status = connection.responseCode
-                if (status in 300..399) {
-                    val location = connection.getHeaderField("Location") ?: return false
-                    val next = current.toURI().resolve(location)
-                    if (!requiredOrigin.sameOrigin(next.toString())) return false
-                    current = next.toURL()
-                    return@repeat
-                }
-                if (status !in 200..299) return false
-
-                val contentType = connection.contentType.orEmpty().lowercase()
-                if (!contentType.contains("text/html") && !contentType.contains("application/xhtml+xml")) {
-                    return false
-                }
-                val html = connection.inputStream.use(::readLimitedHtml)
-                return Regex("(?is)<title[^>]*>.*?lube\\s*logger.*?</title>").containsMatchIn(html) ||
-                    Regex("(?i)lube\\s*logger").containsMatchIn(html)
-            } catch (_: Exception) {
-                return false
-            } finally {
-                connection?.disconnect()
-            }
-        }
-        return false
-    }
-
-    private fun readLimitedHtml(input: InputStream): String {
-        val bytes = ByteArray(MAX_HTML_BYTES)
-        var total = 0
-        while (total < bytes.size) {
-            val count = input.read(bytes, total, bytes.size - total)
-            if (count < 0) break
-            total += count
-        }
-        return String(bytes, 0, total, Charsets.UTF_8)
     }
 
     private fun showChecking() {
@@ -297,7 +201,7 @@ class MainActivity : Activity() {
             })
             addView(Button(this@MainActivity).apply {
                 text = "Retry"
-                setOnClickListener { findServer() }
+                setOnClickListener { connectionSession?.retry() }
             })
             addView(Button(this@MainActivity).apply {
                 text = "Configure servers"
@@ -339,7 +243,7 @@ class MainActivity : Activity() {
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) scheduleSilentCheck(NETWORK_SETTLE_MS)
+                if (request.isForMainFrame) connectionHint()
             }
 
             override fun onReceivedHttpError(
@@ -348,7 +252,7 @@ class MainActivity : Activity() {
                 errorResponse: WebResourceResponse
             ) {
                 if (request.isForMainFrame && errorResponse.statusCode >= 500) {
-                    scheduleSilentCheck(NETWORK_SETTLE_MS)
+                    connectionHint()
                 }
             }
 
@@ -437,6 +341,8 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        resumed = false
+        connectionSession?.pause()
         webView?.onPause()
         CookieManager.getInstance().flush()
         super.onPause()
@@ -445,7 +351,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         webView?.onResume()
-        scheduleSilentCheck(NETWORK_SETTLE_MS)
+        resumed = true
+        connectionSession?.resume()
     }
 
     override fun onStart() {
@@ -462,7 +369,6 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
-        mainHandler.removeCallbacks(silentCheckRunnable)
         if (networkCallbackRegistered) {
             try {
                 getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
@@ -475,9 +381,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        checkGeneration.incrementAndGet()
+        connectionSession?.close()
+        connectionSession = null
         mainHandler.removeCallbacksAndMessages(null)
-        worker.shutdownNow()
         webView?.apply {
             stopLoading()
             clearHistory()

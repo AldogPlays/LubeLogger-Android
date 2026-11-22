@@ -51,6 +51,8 @@ Click a screenshot to view it larger.
 2. Enter your preferred server URL and, optionally, a fallback address.
 3. Connect and sign in to your LubeLogger server as usual.
 
+Server addresses may include a base path, such as `https://example.com/garage`. Use a base address without credentials, a query string, or a fragment. Previously saved addresses that no longer pass validation remain available to edit in setup.
+
 ## Connection behavior
 
 On first launch, the app prompts for a preferred server URL and an optional fallback URL.
@@ -60,6 +62,8 @@ Before connecting, it performs a short HTTP GET request to verify that the serve
 The preferred server is checked first, followed by the fallback if necessary. If neither is available, the app presents options to retry the connection or reconfigure the server addresses.
 
 While running, the app monitors network transitions and main-page connection failures. When connectivity changes, it validates the active server in the background and automatically switches to the configured fallback when needed.
+
+A healthy fallback remains active until it fails or a fresh connection starts. Switching preserves the current page when it belongs beneath the active address's base path; otherwise the replacement opens at its base address. Connection decisions pause when the app leaves the foreground, including while the upload picker is open, and connectivity is checked again on resume.
 
 ## Privacy and security
 
