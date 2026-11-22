@@ -1,5 +1,12 @@
 # Validation record
 
+## Connection lifecycle — November 21, 2026
+
+- Seven deterministic connection-session tests pass: preferred/fallback selection, healthy fallback retention, debounce and retry timing, manual Retry, pause/close invalidation, stale-result isolation, replacement sessions, and restored-address handling. Three real loopback HTTP tests cover redirect origin restrictions, status/content recognition, redirect exhaustion, bounded reads, and timeouts. Together with address-policy tests, the debug suite contains 13 passing tests.
+- `testDebugUnitTest lintDebug lintRelease assembleDebug assembleRelease` and the final `test` task passed: all 13 JVM tests pass in both debug and release variants. Both lint reports contain 0 errors / 17 warnings. Build/signing identity and platform trust configuration were not changed; no signed release was distributed.
+- Standards and spec reviews found no concrete implementation defect or scope creep. By source inspection, the Activity rejects unusable browser restoration, preserves the WebView/upload callback across pause, and reads the current page when applying replacement decisions.
+- `adb devices -l` reported no attached devices. Actual WebView restoration success/failure, editable legacy settings, picker upload delivery, network transitions, and the HTTPS/private-CA matrix remain unverified on-device. Session/HTTP tests do not establish these Android runtime behaviors.
+
 ## Server-address policy — November 21, 2026
 
 - Three JVM regression tests pass, covering normalized identity, invalid configured addresses, origin-wide navigation decisions, and segment-aware page transfer with preserved encoded data/query/fragment. TDD runs first failed for each newly introduced behavior.
